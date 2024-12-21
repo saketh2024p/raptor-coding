@@ -16,7 +16,7 @@ import (
 	peer "github.com/libp2p/go-libp2p/core/peer"
 )
 
-// ErrBlockAdder is returned when adding a to multiple destinations
+// ErrBlockAdder is returned when adding to multiple destinations
 // block fails on all of them.
 var ErrBlockAdder = errors.New("failed to put block on all destinations")
 
@@ -33,8 +33,8 @@ type BlockStreamer struct {
 	err    error
 }
 
-// NewBlockStreamer creates a BlockStreamer given an rpc client, allocated
-// peers and a channel on which the blocks to stream are received.
+// NewBlockStreamer creates a BlockStreamer given an RPC client, allocated
+// peers, and a channel on which the blocks to stream are received.
 func NewBlockStreamer(ctx context.Context, rpcClient *rpc.Client, dests []peer.ID, blocks <-chan api.NodeWithMeta) *BlockStreamer {
 	bsCtx, cancel := context.WithCancel(ctx)
 
@@ -51,7 +51,7 @@ func NewBlockStreamer(ctx context.Context, rpcClient *rpc.Client, dests []peer.I
 	return &bs
 }
 
-// Done returns a channel which gets closed when the BlockStreamer has
+// Done returns a channel that gets closed when the BlockStreamer has
 // finished.
 func (bs *BlockStreamer) Done() <-chan struct{} {
 	return bs.ctx.Done()
@@ -63,7 +63,7 @@ func (bs *BlockStreamer) setErr(err error) {
 	bs.errMu.Unlock()
 }
 
-// Err returns any errors that happened after the operation of the
+// Err returns any errors that occurred during the operation of the
 // BlockStreamer, for example when blocks could not be put to all nodes.
 func (bs *BlockStreamer) Err() error {
 	bs.errMu.Lock()
@@ -75,7 +75,7 @@ func (bs *BlockStreamer) streamBlocks() {
 	defer bs.cancel()
 
 	// Nothing should be sent on out.
-	// We drain though
+	// We drain though.
 	out := make(chan struct{})
 	go func() {
 		for range out {
@@ -103,7 +103,7 @@ func (bs *BlockStreamer) streamBlocks() {
 	}
 }
 
-// IpldNodeToNodeWithMeta converts an ipld.Node to api.NodeWithMeta.
+// IpldNodeToNodeWithMeta converts an IPLD node to an `api.NodeWithMeta`.
 func IpldNodeToNodeWithMeta(n ipld.Node) api.NodeWithMeta {
 	size, err := n.Size()
 	if err != nil {
@@ -117,7 +117,7 @@ func IpldNodeToNodeWithMeta(n ipld.Node) api.NodeWithMeta {
 	}
 }
 
-// BlockAllocate helps allocating blocks to peers.
+// BlockAllocate helps allocate blocks to peers.
 func BlockAllocate(ctx context.Context, rpc *rpc.Client, pinOpts api.PinOptions) ([]peer.ID, error) {
 	// Find where to allocate this file
 	var allocsStr []peer.ID
@@ -133,7 +133,7 @@ func BlockAllocate(ctx context.Context, rpc *rpc.Client, pinOpts api.PinOptions)
 }
 
 // DefaultECAllocate selects a peer to send a shard.
-// It uses a round-robin strategy to allocate shards to peers, use hash value sorts peers, and assigns different order of peers for data shards and parity shards.
+// It uses a round-robin strategy to allocate shards to peers, leveraging hash-based sorting and distributing shards between data and parity peers.
 func DefaultECAllocate(ctx context.Context, rpc *rpc.Client, hashName string, d, p, idx int, isData bool) (peer.ID, error) {
 	if d <= 0 || p <= 0 || idx < 0 {
 		return "", errors.New("invalid input")
@@ -153,14 +153,14 @@ func DefaultECAllocate(ctx context.Context, rpc *rpc.Client, hashName string, d,
 	}
 
 	if len(peers) == 0 {
-		return "", errors.New("error no peers")
+		return "", errors.New("no peers available")
 	}
 
 	if len(peers) == 1 {
 		return peers[0], nil
 	}
 
-	// Sort peers by hash
+	// Sort peers by hash.
 	h := fnv.New32()
 	hashPeers := make(map[peer.ID]uint32)
 	for _, peer := range peers {
@@ -171,26 +171,28 @@ func DefaultECAllocate(ctx context.Context, rpc *rpc.Client, hashName string, d,
 	sort.Slice(peers, func(i, j int) bool {
 		return hashPeers[peers[i]] < hashPeers[peers[j]]
 	})
-	// Choose the peer based on hash, either in positive or reverse order
+
+	// Divide peers into data and parity groups.
 	dNum := d * len(peers) / (d + p)
 	if d*len(peers)%(d+p) != 0 && dNum < len(peers)-1 {
-		dNum += 1
+		dNum++
 	}
-	dPeers := peers[:dNum:dNum]
+	dPeers := peers[:dNum]
 	pPeers := peers[dNum:]
+
 	if isData {
 		return dPeers[idx%len(dPeers)], nil
 	}
 	return pPeers[idx%len(pPeers)], nil
 }
 
-// ErasurePin helps sending local and remote RPC pin requests.(by setting dest and enable the promission of RPC Call)
+// ErasurePin sends local and remote RPC pin requests by enabling permissions for RPC calls.
 func ErasurePin(ctx context.Context, rpc *rpc.Client, pin api.Pin) error {
 	logger.Debugf("adder pinning %+v", pin)
 	var pinResp api.Pin
 	return rpc.CallContext(
 		ctx,
-		pin.Allocations[0], // use only one peer to pin
+		pin.Allocations[0],
 		"Cluster",
 		"Pin",
 		pin,
@@ -198,7 +200,7 @@ func ErasurePin(ctx context.Context, rpc *rpc.Client, pin api.Pin) error {
 	)
 }
 
-// Pin helps sending local RPC pin requests.
+// Pin sends local RPC pin requests.
 func Pin(ctx context.Context, rpc *rpc.Client, pin api.Pin) error {
 	if pin.ReplicationFactorMin < 0 {
 		pin.Allocations = []peer.ID{}
@@ -207,42 +209,10 @@ func Pin(ctx context.Context, rpc *rpc.Client, pin api.Pin) error {
 	var pinResp api.Pin
 	return rpc.CallContext(
 		ctx,
-		"", // use ourself to pin
+		"",
 		"Cluster",
 		"Pin",
 		pin,
 		&pinResp,
 	)
-}
-
-// ErrDAGNotFound is returned whenever we try to get a block from the DAGService.
-var ErrDAGNotFound = errors.New("dagservice: a Get operation was attempted while cluster-adding (this is likely a bug)")
-
-// BaseDAGService partially implements an ipld.DAGService.
-// It provides the methods which are not needed by ClusterDAGServices
-// (Get*, Remove*) so that they can save adding this code.
-type BaseDAGService struct {
-}
-
-// Get always returns errNotFound
-func (dag BaseDAGService) Get(ctx context.Context, key cid.Cid) (ipld.Node, error) {
-	return nil, ErrDAGNotFound
-}
-
-// GetMany returns an output channel that always emits an error
-func (dag BaseDAGService) GetMany(ctx context.Context, keys []cid.Cid) <-chan *ipld.NodeOption {
-	out := make(chan *ipld.NodeOption, 1)
-	out <- &ipld.NodeOption{Err: ErrDAGNotFound}
-	close(out)
-	return out
-}
-
-// Remove is a nop
-func (dag BaseDAGService) Remove(ctx context.Context, key cid.Cid) error {
-	return nil
-}
-
-// RemoveMany is a nop
-func (dag BaseDAGService) RemoveMany(ctx context.Context, keys []cid.Cid) error {
-	return nil
 }

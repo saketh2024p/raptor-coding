@@ -18,6 +18,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
+	raptor "github.com/example/raptor-codes" // Placeholder for Raptor coding library
 )
 
 var nodeCh chan ipld.Node
@@ -61,7 +62,7 @@ func NewNodeFromBytesAndDAGService(file files.Node, dg ipld.DAGService) (ipld.No
 
 func SplitAndRecon(t *testing.T, dgs ipld.DAGService, file files.Node, shardSize int) {
 	fileSize, _ := file.Size()
-	rs := New(context.Background(), 4, 2, shardSize)
+	raptor := NewRaptor(context.Background(), 4, 2, shardSize) // Replace Reed-Solomon with Raptor
 	// send blocks and receive parityVects shards
 	dataVects := make([][]byte, 1)
 	root, err := NewNodeFromBytesAndDAGService(file, dgs)
@@ -72,26 +73,26 @@ func SplitAndRecon(t *testing.T, dgs ipld.DAGService, file files.Node, shardSize
 		n := <-nodeCh
 		s, _ := n.Size()
 		if curSize+int(s) > shardSize {
-			rs.SendBlockTo() <- StatBlock{Stat: ShardEndBlock}
+			raptor.SendBlockTo() <- StatBlock{Stat: ShardEndBlock}
 			curSize = 0
 			dataVects = append(dataVects, make([]byte, 0))
 		}
 		curSize += int(s)
 		sum += int(s)
 		dataVects[len(dataVects)-1] = append(dataVects[len(dataVects)-1], n.RawData()...)
-		rs.SendBlockTo() <- StatBlock{Node: n, Stat: DefaultBlock}
+		raptor.SendBlockTo() <- StatBlock{Node: n, Stat: DefaultBlock}
 		fmt.Printf("fileSize:%d, sum:%d, cursize:%d, shardSize:%d\n", fileSize, sum, curSize, shardSize)
 		if root.Cid() == n.Cid() {
 			if curSize > 0 {
-				rs.SendBlockTo() <- StatBlock{Stat: ShardEndBlock}
+				raptor.SendBlockTo() <- StatBlock{Stat: ShardEndBlock}
 			}
-			rs.SendBlockTo() <- StatBlock{Stat: FileEndBlock}
+			raptor.SendBlockTo() <- StatBlock{Stat: FileEndBlock}
 			break
 		}
 	}
 	parityVects := make([][]byte, 0)
 	for {
-		p := <-rs.GetParity()
+		p := <-raptor.GetParity()
 		if p.Name == "" { // channel closed
 			break
 		}
@@ -103,16 +104,16 @@ func SplitAndRecon(t *testing.T, dgs ipld.DAGService, file files.Node, shardSize
 	for i, vect := range dataVects {
 		dShardSize[i] = len(vect)
 	}
-	batchNum := (len(dataVects) + rs.dataShards - 1) / rs.dataShards
+	batchNum := (len(dataVects) + raptor.dataShards - 1) / raptor.dataShards
 	for i := 0; i < batchNum; i++ {
-		preData0 := make([]byte, len(dataVects[i*rs.dataShards]))
-		copy(preData0, dataVects[i*rs.dataShards])
-		dataVects[i*rs.dataShards] = nil
+		preData0 := make([]byte, len(dataVects[i*raptor.dataShards]))
+		copy(preData0, dataVects[i*raptor.dataShards])
+		dataVects[i*raptor.dataShards] = nil
 		shardCh := make(chan Shard, 6)
-		dl := i * rs.dataShards
-		dr := min((i+1)*rs.dataShards, len(dShardSize))
-		pl := i * rs.parityShards
-		pr := (i + 1) * rs.parityShards
+		dl := i * raptor.dataShards
+		dr := min((i+1)*raptor.dataShards, len(dShardSize))
+		pl := i * raptor.parityShards
+		pr := (i + 1) * raptor.parityShards
 		batchDataShards := dr - dl
 		go func(i int) {
 			defer close(shardCh)
@@ -125,7 +126,7 @@ func SplitAndRecon(t *testing.T, dgs ipld.DAGService, file files.Node, shardSize
 				shardCh <- Shard{Idx: j - pl + batchDataShards, RawData: parityVects[j]}
 			}
 		}(i)
-		err, batch := rs.BatchRecon(context.Background(), i, dShardSize[dl:dr], shardCh)
+		err, batch := raptor.BatchRecon(context.Background(), i, dShardSize[dl:dr], shardCh)
 		assert.Nil(t, err)
 		assert.Equal(t, preData0, batch.Shards[0])
 	}
@@ -134,13 +135,13 @@ func SplitAndRecon(t *testing.T, dgs ipld.DAGService, file files.Node, shardSize
 func NewRandFile(fileSize int) files.Node {
 	data := make([]byte, fileSize)
 	rand.Read(data)
-	return files.NewMapDirectory(map[string]files.Node{"Reed-Solomon-test-file": files.NewBytesFile(data)})
+	return files.NewMapDirectory(map[string]files.Node{"Raptor-test-file": files.NewBytesFile(data)})
 }
 
 func NewDirectory(t *testing.T) (files.Node, *test.ShardingTestHelper) {
 	sth := test.NewShardingTestHelper()
 	dir := sth.GetTreeSerialFile(t)
-	return files.NewMapDirectory(map[string]files.Node{"Reed-Solomon-test-dir": dir}), sth
+	return files.NewMapDirectory(map[string]files.Node{"Raptor-test-dir": dir}), sth
 }
 
 type mockCDAGServ struct {
@@ -154,7 +155,7 @@ func newMockCDAGServ(dgs ipld.DAGService) *mockCDAGServ {
 }
 
 func (dgs *mockCDAGServ) Add(ctx context.Context, node ipld.Node) error {
-	// send node to RS
+	// send node to Raptor
 	nodeCh <- node
 	return dgs.DAGService.Add(ctx, node)
 }
@@ -167,7 +168,7 @@ func (dgs *mockCDAGServ) Allocations() []peer.ID {
 	return nil
 }
 
-func (dgs *mockCDAGServ) GetRS() *ReedSolomon {
+func (dgs *mockCDAGServ) GetRS() *Raptor {
 	return nil
 }
 

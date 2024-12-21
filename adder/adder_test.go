@@ -16,7 +16,7 @@ import (
 	peer "github.com/libp2p/go-libp2p/core/peer"
 
 	files "github.com/ipfs/boxo/files"
-	cid "github.com/ipfs/go-cid"
+	cid "github.com/go-cid/cid"
 )
 
 type mockCDAGServ struct {
@@ -25,7 +25,6 @@ type mockCDAGServ struct {
 
 func newMockCDAGServ() *mockCDAGServ {
 	return &mockCDAGServ{
-		// write-only DAGs.
 		MockDAGService: test.NewMockDAGService(true),
 	}
 }
@@ -49,8 +48,7 @@ func (dgs *mockCDAGServ) GetRS() *ec.ReedSolomon {
 	return nil
 }
 
-func (dgs *mockCDAGServ) SetParity(name string) {
-}
+func (dgs *mockCDAGServ) SetParity(name string) {}
 
 func (dgs *mockCDAGServ) FlushCurrentShard(ctx context.Context) (cid api.Cid, err error) {
 	return api.CidUndef, err
@@ -122,7 +120,7 @@ func TestAdder_ContextCancelled(t *testing.T) {
 	sth := test.NewShardingTestHelper()
 	defer sth.Clean(t)
 
-	lg, closer := sth.GetRandFileReader(t, 100000) // 50 MB
+	lg, closer := sth.GetRandFileReader(t, 100000)
 	st := sth.GetTreeSerialFile(t)
 	defer closer.Close()
 	defer st.Close()
@@ -152,14 +150,12 @@ func TestAdder_ContextCancelled(t *testing.T) {
 		}
 		t.Log(err)
 	}()
-	// adder.FromMultipart will finish, if sleep more
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	wg.Wait()
 }
 
 func TestAdder_CAR(t *testing.T) {
-	// prepare a CAR file
 	ctx := context.Background()
 	sth := test.NewShardingTestHelper()
 	defer sth.Clean(t)
@@ -175,13 +171,12 @@ func TestAdder_CAR(t *testing.T) {
 		t.Fatal(err)
 	}
 	var carBuf bytes.Buffer
-	// Make a CAR out of the files we added.
+
 	err = car.WriteCar(ctx, dags, []cid.Cid{root.Cid}, &carBuf)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Make the CAR look like a multipart.
 	carFile := files.NewReaderFile(&carBuf)
 	carDir := files.NewMapDirectory(
 		map[string]files.Node{"": carFile},
@@ -189,7 +184,6 @@ func TestAdder_CAR(t *testing.T) {
 	carMf := files.NewMultiFileReader(carDir, true, false)
 	carMr := multipart.NewReader(carMf, carMf.Boundary())
 
-	// Add the car, discarding old dags.
 	dags = newMockCDAGServ()
 	defer dags.Close()
 
@@ -212,11 +206,10 @@ func TestAdder_CAR(t *testing.T) {
 			t.Fatal("unexpected block extracted from CAR:", c)
 		}
 	}
-
 }
 
 func TestAdder_LargeFolder(t *testing.T) {
-	items := 10000 // add 10000 items
+	items := 10000
 
 	sth := test.NewShardingTestHelper()
 	defer sth.Clean(t)
@@ -242,4 +235,50 @@ func TestAdder_LargeFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAdder_RaptorCoding(t *testing.T) {
+	sth := test.NewShardingTestHelper()
+	defer sth.Clean(t)
+
+	mr, closer := sth.GetTreeMultiReader(t)
+	defer closer.Close()
+	r := multipart.NewReader(mr, mr.Boundary())
+	p := api.DefaultAddParams()
+	p.Erasure = true
+	p.DataShards = 4
+	p.ParityShards = 2
+	p.Name = "testfile"
+
+	dags := newMockCDAGServ()
+	defer dags.Close()
+
+	parityDags := newMockCDAGServ()
+	defer parityDags.Close()
+
+	adder := New(dags, p, nil)
+	adder.SetDAGService2(parityDags)
+
+	root, err := adder.FromMultipart(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if root.String() != test.ShardingDirBalancedRootCID {
+		t.Error("expected the right content root for data shards")
+	}
+
+	if len(parityDags.Nodes) != p.ParityShards {
+		t.Fatalf("expected %d parity shards, got %d", p.ParityShards, len(parityDags.Nodes))
+	}
+
+	for i := 0; i < p.ParityShards; i++ {
+		shardName := fmt.Sprintf("%s-parity-shard-%d", p.Name, i)
+		_, ok := parityDags.Nodes[cid.NewCidV1(cid.Raw, []byte(shardName))]
+		if !ok {
+			t.Fatalf("parity shard %d not added to DAG service", i)
+		}
+	}
+
+	t.Log("Raptor coding test passed successfully")
 }

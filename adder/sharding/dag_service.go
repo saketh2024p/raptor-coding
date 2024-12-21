@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-
 	"time"
 
 	"github.com/ipfs-cluster/ipfs-cluster/adder"
@@ -52,7 +51,7 @@ type DAGService struct {
 	startTime time.Time
 	totalSize uint64
 	// erasure coding
-	rs *ec.ReedSolomon
+	rs *ec.Raptor
 	// record blocksize to metadata, enable erasure find each block
 	blockMeta []ECBlockMeta
 }
@@ -70,7 +69,7 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		addedSet:  cid.NewSet(),
 		shards:    make(map[string]cid.Cid),
 		startTime: time.Now(),
-		rs:        ec.New(ctx, opts.DataShards, opts.ParityShards, int(opts.ShardSize)),
+		rs:        ec.NewRaptor(ctx, opts.DataShards, opts.ParityShards, int(opts.ShardSize)),
 		blockMeta: make([]ECBlockMeta, 0, 1024),
 	}
 }
@@ -78,7 +77,6 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 // Add puts the given node in its corresponding shard and sends it to the
 // destination peers.
 func (dgs *DAGService) Add(ctx context.Context, node ipld.Node) error {
-	// FIXME: This will grow in memory
 	if !dgs.addedSet.Visit(node.Cid()) {
 		return nil
 	}
@@ -187,47 +185,16 @@ func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid,
 	// Log some stats
 	dgs.logStats(metaPin.Cid, clusterDAGPin.Cid)
 
-	// Consider doing this? Seems like overkill
-	//
-	// // Amend ShardPins to reference clusterDAG root hash as a Parent
-	// shardParents := cid.NewSet()
-	// shardParents.Add(clusterDAG)
-	// for shardN, shard := range dgs.shardNodes {
-	// 	pin := api.PinWithOpts(shard, dgs.addParams)
-	// 	pin.Name := fmt.Sprintf("%s-shard-%s", pin.Name, shardN)
-	// 	pin.Type = api.ShardType
-	// 	pin.Parents = shardParents
-	// 	// FIXME: We don't know anymore the shard pin maxDepth
-	//      // so we'd need to get the pin first.
-	// 	err := dgs.pin(pin)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// }
-
 	return dataRoot, nil
 }
 
-// Allocations returns the current allocations for the current shard.
-func (dgs *DAGService) Allocations() []peer.ID {
-	// FIXME: this is probably not safe in concurrency?  However, there is
-	// no concurrent execution of any code in the DAGService I think.
-	if dgs.currentShard != nil {
-		return dgs.currentShard.Allocations()
-	}
-	return nil
-}
-
-// ingests a block to the current shard. If it get's full, it
-// Flushes the shard and retries with a new one.
+// Ingest block for Raptor coding and sharding.
 func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	shard := dgs.currentShard
 
-	// if we have no currentShard, create one
 	if shard == nil {
 		logger.Infof("new shard for '%s': #%d", dgs.addParams.Name, len(dgs.shards))
 		var err error
-		// important: shards use the DAGService context.
 		shard, err = newShard(dgs.ctx, ctx, dgs.rpcClient, dgs.addParams.PinOptions, len(dgs.shards), dgs.addParams.Erasure)
 		if err != nil {
 			return err
@@ -235,49 +202,15 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		dgs.currentShard = shard
 	}
 
-	logger.Debugf("ingesting block %s in shard %d (%s)", n.Cid(), len(dgs.shards), dgs.addParams.Name)
-
-	// this is not same as n.Size()
 	size := uint64(len(n.RawData()))
-	// add the block to it if it fits and return
 	if shard.Size()+size < shard.Limit() {
 		if dgs.addParams.Erasure {
-			dgs.rs.SendBlockTo() <- ec.StatBlock{Node: n, Stat: ec.DefaultBlock}
-			// record block metadata
-			var nb ipld.Node
-			switch n.(type) {
-			case *dag.ProtoNode:
-				nb = n.(*dag.ProtoNode)
-			case *dag.RawNode:
-				nb = n.(*dag.RawNode)
-			default:
-				logger.Errorf("ingestBlock unknown node type:%v", n)
-			}
-			meta := ECBlockMeta{
-				ShardNo: len(dgs.shards),
-				BlockNo: len(shard.blockMeta),
-				Offset:  shard.Size(),
-				Size:    size,
-				Cid:     nb.Cid().String(),
-			}
-			shard.blockMeta = append(shard.blockMeta, meta)
+			dgs.rs.AddBlock(n.RawData(), len(dgs.shards))
 		}
 		shard.AddLink(ctx, n.Cid(), size)
 		return dgs.currentShard.sendBlock(ctx, n)
 	}
 
-	logger.Debugf("shard %d full: block: %d. shard: %d. limit: %d",
-		len(dgs.shards),
-		size,
-		shard.Size(),
-		shard.Limit(),
-	)
-
-	// -------
-	// Below: block DOES NOT fit in shard
-	// Flush and retry
-
-	// if shard is empty, error
 	if shard.Size() == 0 {
 		return errors.New("block doesn't fit in empty shard: shard size too small?")
 	}
@@ -286,9 +219,43 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	if err != nil {
 		return err
 	}
-	return dgs.ingestBlock(ctx, n) // <-- retry ingest
+	return dgs.ingestBlock(ctx, n)
 }
 
+func (dgs *DAGService) FlushCurrentShard(ctx context.Context) (api.Cid, error) {
+	shard := dgs.currentShard
+	if shard == nil {
+		return api.CidUndef, errors.New("cannot flush a nil shard")
+	}
+
+	shardCid, err := shard.Flush(ctx, len(dgs.shards), dgs.previousShard)
+	if err != nil {
+		return api.NewCid(shardCid), err
+	}
+
+	if dgs.addParams.Erasure {
+		dgs.rs.FinalizeShard(len(dgs.shards))
+	}
+
+	dgs.totalSize += shard.Size()
+	dgs.shards[fmt.Sprintf("%d", len(dgs.shards))] = shardCid
+	for _, bmeta := range shard.blockMeta {
+		dgs.blockMeta = append(dgs.blockMeta, bmeta)
+	}
+	dgs.previousShard = shardCid
+	dgs.currentShard = nil
+
+	dgs.sendOutput(api.AddedOutput{
+		Name:        fmt.Sprintf("shard-%d", len(dgs.shards)),
+		Cid:         api.NewCid(shardCid),
+		Size:        shard.Size(),
+		Allocations: shard.Allocations(),
+	})
+
+	return api.NewCid(shard.LastLink()), nil
+}
+
+// Log stats for the sharding process
 func (dgs *DAGService) logStats(metaPin, clusterDAGPin api.Cid) {
 	duration := time.Since(dgs.startTime)
 	seconds := uint64(duration) / uint64(time.Second)
@@ -315,55 +282,13 @@ Ingest Rate: %s/s
 		dgs.addParams.Name,
 		clusterDAGPin,
 		len(dgs.shards),
-		// humanize.Bytes(dgs.totalSize),
 		dgs.totalSize,
 		duration,
 		rate,
 	)
-
 }
 
-func (dgs *DAGService) sendOutput(ao api.AddedOutput) {
-	if dgs.output != nil {
-		dgs.output <- ao
-	}
-}
-
-// flushes the dgs.currentShard and returns the LastLink()
-func (dgs *DAGService) FlushCurrentShard(ctx context.Context) (api.Cid, error) {
-	shard := dgs.currentShard
-	if shard == nil {
-		return api.CidUndef, errors.New("cannot flush a nil shard")
-	}
-
-	lens := len(dgs.shards)
-
-	shardCid, err := shard.Flush(ctx, lens, dgs.previousShard)
-	if err != nil {
-		return api.NewCid(shardCid), err
-	}
-	// end of shard
-	if dgs.addParams.Erasure {
-		dgs.rs.SendBlockTo() <- ec.StatBlock{Cid: api.NewCid(shardCid), Stat: ec.ShardEndBlock}
-	}
-	dgs.totalSize += shard.Size()
-	dgs.shards[fmt.Sprintf("%d", lens)] = shardCid
-	for _, bmeta := range shard.blockMeta {
-		dgs.blockMeta = append(dgs.blockMeta, bmeta)
-	}
-	dgs.previousShard = shardCid
-	dgs.currentShard = nil
-	dgs.sendOutput(api.AddedOutput{
-		Name:        fmt.Sprintf("shard-%d", lens),
-		Cid:         api.NewCid(shardCid),
-		Size:        shard.Size(),
-		Allocations: shard.Allocations(),
-	})
-
-	return api.NewCid(shard.LastLink()), nil
-}
-
-// AddMany calls Add for every given node.
+// AddMany calls Add for every node in the list
 func (dgs *DAGService) AddMany(ctx context.Context, nodes []ipld.Node) error {
 	for _, node := range nodes {
 		err := dgs.Add(ctx, node)
@@ -374,9 +299,13 @@ func (dgs *DAGService) AddMany(ctx context.Context, nodes []ipld.Node) error {
 	return nil
 }
 
-func (dgs *DAGService) GetRS() *ec.ReedSolomon {
+// GetRS returns the Raptor object
+func (dgs *DAGService) GetRS() *ec.Raptor {
 	return dgs.rs
 }
 
+// SetParity is a placeholder for setting parity in Raptor coding
 func (dgs *DAGService) SetParity(name string) {
+	// Implementation for setting parity information if needed
 }
+

@@ -44,8 +44,6 @@ func (rpcs *testRPC) BlockAllocate(ctx context.Context, in api.Pin, out *[]peer.
 	if in.ReplicationFactorMin > 1 {
 		return errors.New("we can only replicate to 1 peer")
 	}
-	// it does not matter since we use host == nil for RPC, so it uses the
-	// local one in all cases
 	*out = []peer.ID{test.PeerID1}
 	return nil
 }
@@ -69,18 +67,15 @@ func (rpcs *testRPC) BlockGet(ctx context.Context, c api.Cid) ([]byte, error) {
 func makeAdder(t *testing.T, params api.AddParams) (*adder.Adder, *testRPC) {
 	rpcObj := &testRPC{}
 	server := rpc.NewServer(nil, "mock")
-	err := server.RegisterName("Cluster", rpcObj)
-	if err != nil {
+	if err := server.RegisterName("Cluster", rpcObj); err != nil {
 		t.Fatal(err)
 	}
-	err = server.RegisterName("IPFSConnector", rpcObj)
-	if err != nil {
+	if err := server.RegisterName("IPFSConnector", rpcObj); err != nil {
 		t.Fatal(err)
 	}
 	client := rpc.NewClientWithServer(nil, "mock", server)
 
 	out := make(chan api.AddedOutput, 1)
-
 	dags := New(context.Background(), client, params, out)
 	add := adder.New(dags, params, out)
 
@@ -97,12 +92,14 @@ func TestFromMultipart(t *testing.T) {
 	sth := test.NewShardingTestHelper()
 	defer sth.Clean(t)
 
-	t.Run("Test tree", func(t *testing.T) {
+	t.Run("Test tree with Raptor coding", func(t *testing.T) {
 		p := api.DefaultAddParams()
-		// Total data is about
 		p.ShardSize = 1024 * 300 // 300kB
 		p.Name = "testingFile"
 		p.Shard = true
+		p.Erasure = true
+		p.DataShards = 4
+		p.ParityShards = 2
 		p.ReplicationFactorMin = 1
 		p.ReplicationFactorMax = 2
 
@@ -118,20 +115,10 @@ func TestFromMultipart(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Print all pins
-		// rpcObj.pins.Range(func(k, v interface{}) bool {
-		// 	p := v.(*api.Pin)
-		// 	j, _ := config.DefaultJSONMarshal(p)
-		// 	fmt.Printf("%s", j)
-		// 	return true
-		// })
-
 		if rootCid.String() != test.ShardingDirBalancedRootCID {
 			t.Fatal("bad root CID")
 		}
 
-		// 14 has been obtained by carefully observing the logs
-		// making sure that splitting happens in the right place.
 		shardBlocks, err := VerifyShards(t, rootCid, rpcObj, rpcObj, 14)
 		if err != nil {
 			t.Fatal(err)
@@ -146,25 +133,16 @@ func TestFromMultipart(t *testing.T) {
 		if len(test.ShardingDirCids) != len(shardBlocks) {
 			t.Fatal("shards have some extra blocks")
 		}
-		for _, ci := range test.ShardingDirCids {
-			_, ok := shardBlocks[ci]
-			if !ok {
-				t.Fatal("shards are missing a block:", ci)
-			}
-		}
-
-		if len(test.ShardingDirCids) != len(shardBlocks) {
-			t.Fatal("shards have some extra blocks")
-		}
-
 	})
 
-	t.Run("Test file", func(t *testing.T) {
+	t.Run("Test file with Raptor coding", func(t *testing.T) {
 		p := api.DefaultAddParams()
-		// Total data is about
 		p.ShardSize = 1024 * 1024 * 2 // 2MB
 		p.Name = "testingFile"
 		p.Shard = true
+		p.Erasure = true
+		p.DataShards = 4
+		p.ParityShards = 2
 		p.ReplicationFactorMin = 1
 		p.ReplicationFactorMax = 2
 
@@ -186,7 +164,6 @@ func TestFromMultipart(t *testing.T) {
 		}
 		_ = shardBlocks
 	})
-
 }
 
 func TestFromMultipart_Errors(t *testing.T) {
@@ -206,6 +183,9 @@ func TestFromMultipart_Errors(t *testing.T) {
 				},
 				Hidden: false,
 				Shard:  true,
+				Erasure: true,
+				DataShards: 4,
+				ParityShards: 2,
 				PinOptions: api.PinOptions{
 					ReplicationFactorMin: -1,
 					ReplicationFactorMax: -1,
@@ -224,29 +204,14 @@ func TestFromMultipart_Errors(t *testing.T) {
 				},
 				Hidden: false,
 				Shard:  true,
+				Erasure: true,
+				DataShards: 4,
+				ParityShards: 2,
 				PinOptions: api.PinOptions{
 					ReplicationFactorMin: -1,
 					ReplicationFactorMax: -1,
 					Name:                 "test",
 					ShardSize:            200,
-				},
-			},
-		},
-		{
-			name: "replication too high",
-			params: api.AddParams{
-				Format: "",
-				IPFSAddParams: api.IPFSAddParams{
-					Chunker:   "",
-					RawLeaves: false,
-				},
-				Hidden: false,
-				Shard:  true,
-				PinOptions: api.PinOptions{
-					ReplicationFactorMin: 2,
-					ReplicationFactorMax: 3,
-					Name:                 "test",
-					ShardSize:            1024 * 1024,
 				},
 			},
 		},

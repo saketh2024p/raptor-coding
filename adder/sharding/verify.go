@@ -11,20 +11,18 @@ import (
 
 // MockPinStore is used in VerifyShards
 type MockPinStore interface {
-	// Gets a pin
 	PinGet(context.Context, api.Cid) (api.Pin, error)
 }
 
 // MockBlockStore is used in VerifyShards
 type MockBlockStore interface {
-	// Gets a block
 	BlockGet(context.Context, api.Cid) ([]byte, error)
 }
 
 // VerifyShards checks that a sharded CID has been correctly formed and stored.
 // This is a helper function for testing. It returns a map with all the blocks
-// from all shards.
-func VerifyShards(t *testing.T, rootCid api.Cid, pins MockPinStore, ipfs MockBlockStore, expectedShards int) (map[string]struct{}, error) {
+// from all shards, including data and parity shards.
+func VerifyShards(t *testing.T, rootCid api.Cid, pins MockPinStore, ipfs MockBlockStore, expectedShards int, raptor bool) (map[string]struct{}, error) {
 	ctx := context.Background()
 	metaPin, err := pins.PinGet(ctx, rootCid)
 	if err != nil {
@@ -63,7 +61,7 @@ func VerifyShards(t *testing.T, rootCid api.Cid, pins MockPinStore, ipfs MockBlo
 
 	shards := clusterDAGNode.Links()
 	if len(shards) != expectedShards {
-		return nil, fmt.Errorf("bad number of shards")
+		return nil, fmt.Errorf("bad number of shards: got %d, want %d", len(shards), expectedShards)
 	}
 
 	shardBlocks := make(map[string]struct{})
@@ -102,5 +100,16 @@ func VerifyShards(t *testing.T, rootCid api.Cid, pins MockPinStore, ipfs MockBlo
 			shardBlocks[ci] = struct{}{}
 		}
 	}
+
+	if raptor {
+		// Additional verification for Raptor coding
+		t.Log("Verifying Raptor coding parity shards...")
+		parityShards := clusterPin.Metadata["raptorParity"]
+		if parityShards == "" {
+			return nil, fmt.Errorf("no Raptor parity metadata found")
+		}
+		t.Logf("Raptor coding parity shards: %s", parityShards)
+	}
+
 	return shardBlocks, nil
 }

@@ -36,6 +36,7 @@ type shard struct {
 	sizeLimit   uint64
 	erasure     bool
 }
+
 type ECBlockMeta struct {
 	ShardNo int
 	BlockNo int
@@ -83,9 +84,6 @@ func newShard(globalCtx context.Context, ctx context.Context, rpc *rpc.Client, o
 	if opts.ReplicationFactorMin < 0 {
 		logger.Warn("Shard is set to replicate everywhere ,which doesn't make sense for sharding")
 	}
-
-	// TODO (hector): get latest metrics for allocations, adjust sizeLimit
-	// to minimum. This can be done later.
 
 	blocks := make(chan api.NodeWithMeta, 256)
 
@@ -193,7 +191,7 @@ func (sh *shard) Flush(ctx context.Context, shardN int, prev cid.Cid) (cid.Cid, 
 	if sh.erasure {
 		pin.ReplicationFactorMin = 1
 		pin.ReplicationFactorMax = 1
-		return rootCid, adder.ErasurePin(ctx, sh.rpc, pin)
+		return rootCid, adder.RaptorPin(ctx, sh.rpc, pin)
 	} else {
 		return rootCid, adder.Pin(ctx, sh.rpc, pin)
 	}
@@ -204,7 +202,7 @@ func (sh *shard) Size() uint64 {
 	return sh.currentSize
 }
 
-// Size returns this shard's size limit.
+// Limit returns this shard's size limit.
 func (sh *shard) Limit() uint64 {
 	return sh.sizeLimit
 }

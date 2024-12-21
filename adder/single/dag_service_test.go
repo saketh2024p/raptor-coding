@@ -41,8 +41,6 @@ func (rpcs *testClusterRPC) BlockAllocate(ctx context.Context, in api.Pin, out *
 	if in.ReplicationFactorMin > 1 {
 		return errors.New("we can only replicate to 1 peer")
 	}
-	// it does not matter since we use host == nil for RPC, so it uses the
-	// local one in all cases.
 	*out = []peer.ID{test.PeerID1}
 	return nil
 }
@@ -133,6 +131,46 @@ func TestAdd(t *testing.T) {
 		_, ok := clusterRPC.pins.Load(test.ShardingDirTrickleRootCID)
 		if !ok {
 			t.Error("the tree wasn't pinned")
+		}
+	})
+
+	t.Run("raptor coding", func(t *testing.T) {
+		clusterRPC := &testClusterRPC{}
+		ipfsRPC := &testIPFSRPC{}
+		server := rpc.NewServer(nil, "mock")
+		err := server.RegisterName("Cluster", clusterRPC)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = server.RegisterName("IPFSConnector", ipfsRPC)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := rpc.NewClientWithServer(nil, "mock", server)
+		params := api.DefaultAddParams()
+		params.Erasure = true
+		params.DataShards = 4
+		params.ParityShards = 2
+		params.Name = "testfile-parity-shard-1"
+
+		dags := New(context.Background(), client, params, false)
+		dags.SetParity("testfile-parity-shard-1")
+		add := adder.New(dags, params, nil)
+
+		sth := test.NewShardingTestHelper()
+		defer sth.Clean(t)
+		mr, closer := sth.GetTreeMultiReader(t)
+		defer closer.Close()
+		r := multipart.NewReader(mr, mr.Boundary())
+
+		rootCid, err := add.FromMultipart(context.Background(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, ok := clusterRPC.pins.Load(rootCid.String())
+		if !ok {
+			t.Error("Raptor coded file was not pinned")
 		}
 	})
 }
