@@ -19,7 +19,9 @@ var cfgJSON = []byte(`
 	"max_header_bytes": 16384,
 	"extract_headers_extra": [],
 	"extract_headers_path": "/api/v0/version",
-	"extract_headers_ttl": "5m"
+	"extract_headers_ttl": "5m",
+	"raptor_code_version": "1.0",
+	"raptor_coding_scheme": "FEC-Raptor"
 }
 `)
 
@@ -73,13 +75,33 @@ func TestLoadJSON(t *testing.T) {
 	if err == nil {
 		t.Error("expected error in extract_headers_ttl")
 	}
+
 	j = &jsonConfig{}
 	json.Unmarshal(cfgJSON, j)
 	j.MaxHeaderBytes = minMaxHeaderBytes - 1
 	tst, _ = json.Marshal(j)
 	err = cfg.LoadJSON(tst)
 	if err == nil {
-		t.Error("expected error in extract_headers_ttl")
+		t.Error("expected error in max_header_bytes")
+	}
+
+	// Test invalid Raptor coding fields
+	j = &jsonConfig{}
+	json.Unmarshal(cfgJSON, j)
+	j.RaptorCodeVersion = ""
+	tst, _ = json.Marshal(j)
+	err = cfg.LoadJSON(tst)
+	if err == nil {
+		t.Error("expected error in raptor_code_version")
+	}
+
+	j = &jsonConfig{}
+	json.Unmarshal(cfgJSON, j)
+	j.RaptorCodingScheme = ""
+	tst, _ = json.Marshal(j)
+	err = cfg.LoadJSON(tst)
+	if err == nil {
+		t.Error("expected error in raptor_coding_scheme")
 	}
 }
 
@@ -144,15 +166,35 @@ func TestDefault(t *testing.T) {
 	if cfg.Validate() == nil {
 		t.Fatal("expected error validating")
 	}
+
+	cfg.Default()
+	cfg.RaptorCodeVersion = ""
+	if cfg.Validate() == nil {
+		t.Fatal("expected error validating raptor_code_version")
+	}
+
+	cfg.Default()
+	cfg.RaptorCodingScheme = ""
+	if cfg.Validate() == nil {
+		t.Fatal("expected error validating raptor_coding_scheme")
+	}
 }
 
 func TestApplyEnvVars(t *testing.T) {
 	os.Setenv("CLUSTER_IPFSPROXY_IDLETIMEOUT", "22s")
+	os.Setenv("CLUSTER_IPFSPROXY_RAPTOR_CODE_VERSION", "2.0")
+	os.Setenv("CLUSTER_IPFSPROXY_RAPTOR_CODING_SCHEME", "FEC-RaptorX")
 	cfg := &Config{}
 	cfg.Default()
 	cfg.ApplyEnvVars()
 
 	if cfg.IdleTimeout != 22*time.Second {
 		t.Error("failed to override idle_timeout with env var")
+	}
+	if cfg.RaptorCodeVersion != "2.0" {
+		t.Error("failed to override raptor_code_version with env var")
+	}
+	if cfg.RaptorCodingScheme != "FEC-RaptorX" {
+		t.Error("failed to override raptor_coding_scheme with env var")
 	}
 }

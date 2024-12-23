@@ -105,6 +105,19 @@ func ProcessStreamingResp(t *testing.T, httpResp *http.Response, err error, resp
 	}
 }
 
+// ValidateRaptorMetadata validates metadata related to Raptor coding in responses.
+func ValidateRaptorMetadata(t *testing.T, metadata map[string]interface{}) {
+	if _, ok := metadata["block_size"]; !ok {
+		t.Error("missing block_size in Raptor metadata")
+	}
+	if _, ok := metadata["coding_rate"]; !ok {
+		t.Error("missing coding_rate in Raptor metadata")
+	}
+	if _, ok := metadata["redundancy"]; !ok {
+		t.Error("missing redundancy in Raptor metadata")
+	}
+}
+
 // CheckHeaders checks that all the headers are set to what is expected.
 func CheckHeaders(t *testing.T, expected map[string][]string, url string, headers http.Header) {
 	for k, v := range expected {
@@ -153,7 +166,7 @@ func IsHTTPS(url string) bool {
 	return strings.HasPrefix(url, "https")
 }
 
-// HTTPClient returns a client that supporst both http/https and
+// HTTPClient returns a client that supports both http/https and
 // libp2p-tunneled-http.
 func HTTPClient(t *testing.T, h host.Host, isHTTPS bool) *http.Client {
 	tr := &http.Transport{}
@@ -167,7 +180,8 @@ func HTTPClient(t *testing.T, h host.Host, isHTTPS bool) *http.Client {
 		tr = &http.Transport{
 			TLSClientConfig: &tls.Config{
 				RootCAs: certpool,
-			}}
+			},
+		}
 	}
 	if h != nil {
 		tr.RegisterProtocol("libp2p", p2phttp.NewTransport(h))
@@ -231,7 +245,7 @@ func MakeDelete(t *testing.T, api API, url string, resp interface{}) {
 	CheckHeaders(t, api.Headers(), url, httpResp.Header)
 }
 
-// MakeOptions performs an OPTIONS request against the given api.
+// MakeOptions performs an OPTIONS request against the given API.
 func MakeOptions(t *testing.T, api API, url string, reqHeaders http.Header) http.Header {
 	h := MakeHost(t, api)
 	defer h.Close()

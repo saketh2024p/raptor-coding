@@ -26,14 +26,21 @@ message PinOptions {
   sint32 ReplicationFactorMax = 2;
   string Name = 3;
   uint64 ShardSize = 4;
-  sint32 DataShards = 5;
-  sint32 ParityShards = 6;
-  reserved 7; // reserved for UserAllocations
-  map<string, string> Metadata = 8 [deprecated = true];
-  bytes PinUpdate = 9;
-  uint64 ExpireAt = 10;
-  repeated bytes Origins = 11;
-  repeated Metadata SortedMetadata = 12;
+
+  // Reserved for backward compatibility
+  reserved 5; // DataShards
+  reserved 6; // ParityShards
+
+  string EncodingScheme = 5; // e.g., "Raptor"
+  uint64 SymbolSize = 6; // Size of each symbol in Raptor coding
+  sint32 RepairSymbols = 7; // Number of repair symbols
+  sint32 TotalSymbols = 8; // Total number of symbols (data + repair)
+
+  map<string, string> Metadata = 9 [deprecated = true];
+  bytes PinUpdate = 10;
+  uint64 ExpireAt = 11;
+  repeated bytes Origins = 12;
+  repeated Metadata SortedMetadata = 13;
 }
 
 message Metadata {

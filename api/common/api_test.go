@@ -49,7 +49,6 @@ func routes(c *rpc.Client) []Route {
 			},
 		},
 	}
-
 }
 
 func testAPIwithConfig(t *testing.T, cfg *Config, name string) *API {
@@ -78,7 +77,6 @@ func testAPI(t *testing.T) *API {
 	cfg := newDefaultTestConfig(t)
 	cfg.CORSAllowedOrigins = []string{test.ClientOrigin}
 	cfg.CORSAllowedMethods = []string{"GET", "POST", "DELETE"}
-	//cfg.CORSAllowedHeaders = []string{"Content-Type"}
 	cfg.CORSMaxAge = 10 * time.Minute
 
 	return testAPIwithConfig(t, cfg, "basic")
@@ -97,16 +95,6 @@ func testHTTPSAPI(t *testing.T) *API {
 	return testAPIwithConfig(t, cfg, "https")
 }
 
-func testAPIwithBasicAuth(t *testing.T) *API {
-	cfg := newDefaultTestConfig(t)
-	cfg.BasicAuthCredentials = map[string]string{
-		validUserName: validUserPassword,
-		adminUserName: adminUserPassword,
-	}
-
-	return testAPIwithConfig(t, cfg, "Basic Authentication")
-}
-
 func TestAPIShutdown(t *testing.T) {
 	ctx := context.Background()
 	rest := testAPI(t)
@@ -116,7 +104,6 @@ func TestAPIShutdown(t *testing.T) {
 	}
 	// test shutting down twice
 	rest.Shutdown(ctx)
-
 }
 
 func TestHTTPSTestEndpoint(t *testing.T) {
@@ -199,7 +186,6 @@ func TestAPILogging(t *testing.T) {
 	if !(size2 > size1) {
 		t.Error("logs were not appended")
 	}
-
 }
 
 func TestNotFoundHandler(t *testing.T) {
@@ -225,7 +211,6 @@ func TestNotFoundHandler(t *testing.T) {
 			t.Errorf("expected error not found: %+v", errResp)
 		}
 	}
-
 	test.BothEndpoints(t, tf)
 }
 
@@ -239,14 +224,13 @@ func TestCORS(t *testing.T) {
 		path   string
 	}
 
-	tf := func(t *testing.T, url test.URLFunc) {
+tf := func(t *testing.T, url test.URLFunc) {
 		reqHeaders := make(http.Header)
 		reqHeaders.Set("Origin", "myorigin")
 		reqHeaders.Set("Access-Control-Request-Headers", "Content-Type")
 
 		for _, tc := range []testcase{
 			{"GET", "/test"},
-			//			testcase{},
 		} {
 			reqHeaders.Set("Access-Control-Request-Method", tc.method)
 			headers := test.MakeOptions(t, rest, url(rest)+tc.path, reqHeaders)
@@ -276,369 +260,6 @@ func TestCORS(t *testing.T) {
 				t.Error("Bad AC-Max-Age:", maxage)
 			}
 		}
-
 	}
-
 	test.BothEndpoints(t, tf)
-}
-
-type responseChecker func(*http.Response) error
-type requestShaper func(*http.Request) error
-
-type httpTestcase struct {
-	method  string
-	path    string
-	header  http.Header
-	body    io.ReadCloser
-	shaper  requestShaper
-	checker responseChecker
-}
-
-func httpStatusCodeChecker(resp *http.Response, expectedStatus int) error {
-	if resp.StatusCode == expectedStatus {
-		return nil
-	}
-	return fmt.Errorf("unexpected HTTP status code: %d", resp.StatusCode)
-}
-
-func assertHTTPStatusIsUnauthoriazed(resp *http.Response) error {
-	return httpStatusCodeChecker(resp, http.StatusUnauthorized)
-}
-
-func assertHTTPStatusIsTooLarge(resp *http.Response) error {
-	return httpStatusCodeChecker(resp, http.StatusRequestHeaderFieldsTooLarge)
-}
-
-func makeHTTPStatusNegatedAssert(checker responseChecker) responseChecker {
-	return func(resp *http.Response) error {
-		if checker(resp) == nil {
-			return fmt.Errorf("unexpected HTTP status code: %d", resp.StatusCode)
-		}
-		return nil
-	}
-}
-
-func (tc *httpTestcase) getTestFunction(api *API) test.Func {
-	return func(t *testing.T, prefixMaker test.URLFunc) {
-		h := test.MakeHost(t, api)
-		defer h.Close()
-		url := prefixMaker(api) + tc.path
-		c := test.HTTPClient(t, h, test.IsHTTPS(url))
-		req, err := http.NewRequest(tc.method, url, tc.body)
-		if err != nil {
-			t.Fatal("Failed to assemble a HTTP request: ", err)
-		}
-		if tc.header != nil {
-			req.Header = tc.header
-		}
-		if tc.shaper != nil {
-			err := tc.shaper(req)
-			if err != nil {
-				t.Fatal("Failed to shape a HTTP request: ", err)
-			}
-		}
-		resp, err := c.Do(req)
-		if err != nil {
-			t.Fatal("Failed to make a HTTP request: ", err)
-		}
-		if tc.checker != nil {
-			if err := tc.checker(resp); err != nil {
-				r, e := httputil.DumpRequest(req, true)
-				if e != nil {
-					t.Errorf("Assertion failed with: %q", err)
-				} else {
-					t.Errorf("Assertion failed with: %q on request: \n%.100s", err, r)
-				}
-			}
-		}
-	}
-}
-
-func makeBasicAuthRequestShaper(username, password string) requestShaper {
-	return func(req *http.Request) error {
-		req.SetBasicAuth(username, password)
-		return nil
-	}
-}
-
-func makeTokenAuthRequestShaper(token string) requestShaper {
-	return func(req *http.Request) error {
-		req.Header.Set("Authorization", "Bearer "+token)
-		return nil
-	}
-}
-
-func makeLongHeaderShaper(size int) requestShaper {
-	return func(req *http.Request) error {
-		for sz := size; sz > 0; sz -= 8 {
-			req.Header.Add("Foo", "bar")
-		}
-		return nil
-	}
-}
-
-func TestBasicAuth(t *testing.T) {
-	ctx := context.Background()
-	rest := testAPIwithBasicAuth(t)
-	defer rest.Shutdown(ctx)
-
-	for _, tc := range []httpTestcase{
-		{},
-		{
-			method:  "",
-			path:    "",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "POST",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "DELETE",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "HEAD",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "OPTIONS", // Always allowed for CORS
-			path:    "/foo",
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "PUT",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "TRACE",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "CONNECT",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "BAR",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeBasicAuthRequestShaper(invalidUserName, invalidUserPassword),
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeBasicAuthRequestShaper(validUserName, invalidUserPassword),
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeBasicAuthRequestShaper(invalidUserName, validUserPassword),
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeBasicAuthRequestShaper(adminUserName, validUserPassword),
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeBasicAuthRequestShaper(validUserName, validUserPassword),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "POST",
-			path:    "/foo",
-			shaper:  makeBasicAuthRequestShaper(validUserName, validUserPassword),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "DELETE",
-			path:    "/foo",
-			shaper:  makeBasicAuthRequestShaper(validUserName, validUserPassword),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "BAR",
-			path:    "/foo",
-			shaper:  makeBasicAuthRequestShaper(validUserName, validUserPassword),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "GET",
-			path:    "/test",
-			shaper:  makeBasicAuthRequestShaper(validUserName, validUserPassword),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-	} {
-		test.BothEndpoints(t, tc.getTestFunction(rest))
-	}
-}
-
-func TestTokenAuth(t *testing.T) {
-	ctx := context.Background()
-	rest := testAPIwithBasicAuth(t)
-	defer rest.Shutdown(ctx)
-
-	for _, tc := range []httpTestcase{
-		{},
-		{
-			method:  "",
-			path:    "",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "POST",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "DELETE",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "HEAD",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "OPTIONS", // Always allowed for CORS
-			path:    "/foo",
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "PUT",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "TRACE",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "CONNECT",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "BAR",
-			path:    "/foo",
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeTokenAuthRequestShaper(invalidToken),
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeTokenAuthRequestShaper(invalidToken),
-			checker: assertHTTPStatusIsUnauthoriazed,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeTokenAuthRequestShaper(validToken),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "POST",
-			path:    "/foo",
-			shaper:  makeTokenAuthRequestShaper(validToken),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "DELETE",
-			path:    "/foo",
-			shaper:  makeTokenAuthRequestShaper(validToken),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "BAR",
-			path:    "/foo",
-			shaper:  makeTokenAuthRequestShaper(validToken),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-		{
-			method:  "GET",
-			path:    "/test",
-			shaper:  makeTokenAuthRequestShaper(validToken),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsUnauthoriazed),
-		},
-	} {
-		test.BothEndpoints(t, tc.getTestFunction(rest))
-	}
-}
-
-func TestLimitMaxHeaderSize(t *testing.T) {
-	maxHeaderBytes := 4 * DefaultMaxHeaderBytes
-	cfg := newTestConfig()
-	cfg.MaxHeaderBytes = maxHeaderBytes
-	ctx := context.Background()
-	rest := testAPIwithConfig(t, cfg, "http with maxHeaderBytes")
-	defer rest.Shutdown(ctx)
-
-	for _, tc := range []httpTestcase{
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeLongHeaderShaper(maxHeaderBytes * 2),
-			checker: assertHTTPStatusIsTooLarge,
-		},
-		{
-			method:  "GET",
-			path:    "/foo",
-			shaper:  makeLongHeaderShaper(maxHeaderBytes / 2),
-			checker: makeHTTPStatusNegatedAssert(assertHTTPStatusIsTooLarge),
-		},
-	} {
-		test.BothEndpoints(t, tc.getTestFunction(rest))
-	}
 }

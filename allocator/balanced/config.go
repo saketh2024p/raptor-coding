@@ -14,17 +14,31 @@ const envConfigKey = "cluster_balanced"
 // These are the default values for a Config.
 var (
 	DefaultAllocateBy = []string{"tag:group", "freespace"}
+	DefaultRaptorParams = RaptorConfig{
+		BlockSize:    1024, // Default block size
+		CodingRate:   0.5,  // Default coding rate
+		Redundancy:   2,    // Default redundancy factor
+	}
 )
+
+// RaptorConfig defines Raptor code-specific parameters.
+type RaptorConfig struct {
+	BlockSize  int     `json:"block_size"`  // Size of data blocks
+	CodingRate float64 `json:"coding_rate"` // Ratio of redundancy
+	Redundancy int     `json:"redundancy"`  // Additional blocks for fault tolerance
+}
 
 // Config allows to initialize the Allocator.
 type Config struct {
 	config.Saver
 
-	AllocateBy []string
+	AllocateBy   []string     `json:"allocate_by"`
+	RaptorParams RaptorConfig `json:"raptor_params"`
 }
 
 type jsonConfig struct {
-	AllocateBy []string `json:"allocate_by"`
+	AllocateBy   []string     `json:"allocate_by"`
+	RaptorParams RaptorConfig `json:"raptor_params"`
 }
 
 // ConfigKey returns a human-friendly identifier for this
@@ -36,6 +50,7 @@ func (cfg *Config) ConfigKey() string {
 // Default initializes this Config with sensible values.
 func (cfg *Config) Default() error {
 	cfg.AllocateBy = DefaultAllocateBy
+	cfg.RaptorParams = DefaultRaptorParams
 	return nil
 }
 
@@ -55,8 +70,20 @@ func (cfg *Config) ApplyEnvVars() error {
 // Validate checks that the fields of this configuration have
 // sensible values.
 func (cfg *Config) Validate() error {
-	if len(cfg.AllocateBy) <= 0 {
-		return errors.New("metricalloc.allocate_by is invalid")
+	if len(cfg.AllocateBy) == 0 {
+		return errors.New("allocate_by is invalid")
+	}
+
+	if cfg.RaptorParams.BlockSize <= 0 {
+		return errors.New("invalid block size for Raptor code")
+	}
+
+	if cfg.RaptorParams.CodingRate <= 0 || cfg.RaptorParams.CodingRate > 1 {
+		return errors.New("invalid coding rate for Raptor code")
+	}
+
+	if cfg.RaptorParams.Redundancy < 0 {
+		return errors.New("invalid redundancy for Raptor code")
 	}
 
 	return nil
@@ -81,6 +108,10 @@ func (cfg *Config) applyJSONConfig(jcfg *jsonConfig) error {
 		cfg.AllocateBy = jcfg.AllocateBy
 	}
 
+	if jcfg.RaptorParams.BlockSize > 0 {
+		cfg.RaptorParams = jcfg.RaptorParams
+	}
+
 	return cfg.Validate()
 }
 
@@ -93,7 +124,8 @@ func (cfg *Config) ToJSON() ([]byte, error) {
 
 func (cfg *Config) toJSONConfig() *jsonConfig {
 	return &jsonConfig{
-		AllocateBy: cfg.AllocateBy,
+		AllocateBy:   cfg.AllocateBy,
+		RaptorParams: cfg.RaptorParams,
 	}
 }
 
